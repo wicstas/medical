@@ -1,0 +1,31 @@
+{
+  "name": "my-website",
+  "version": "1.0.0",
+  "dependencies": {
+    "@cornerstonejs/codec-libjpeg-turbo-8bit": "^1.2.2",
+    "@cornerstonejs/core": "^4.15.20",
+    "@cornerstonejs/dicom-image-loader": "^4.15.20",
+    "@cornerstonejs/tools": "^4.15.20",
+    "@originjs/vite-plugin-commonjs": "^1.0.3",
+    "@tailwindcss/vite": "^4.1.18",
+    "animate.css": "^4.1.1",
+    "dcmjs": "^0.49.0",
+    "dicom-parser": "^1.8.21",
+    "dicomweb-client": "^0.11.2",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-helmet": "^6.1.0",
+    "react-router": "^6.30.0",
+    "react-router-dom": "^6.30.0",
+    "tailwindcss": "^4.1.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.4.1",
+    "vite": "^6.3.2"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  }
+}
