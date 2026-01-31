@@ -1,11 +1,18 @@
 import React from 'react';
-import { useEffect, useLayoutEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import ReactDOM from 'react-dom/client';
-import { RenderingEngine, Enums, metaData, init as coreInit } from '@cornerstonejs/core';
-import { imageLoader } from '@cornerstonejs/core/loaders';
-import { calibratedPixelSpacingMetadataProvider, getPixelSpacingInformation, renderToCanvasGPU } from "@cornerstonejs/core/utilities";
+import { init as coreInit, RenderingEngine, Enums, metaData, volumeLoader, setVolumesForViewports } from '@cornerstonejs/core';
 import cornerstoneDICOMImageLoader from "@cornerstonejs/dicom-image-loader";
 import * as cornerstoneTools from '@cornerstonejs/tools';
+const {
+  PanTool,
+  WindowLevelTool,
+  StackScrollTool,
+  ZoomTool,
+  ToolGroupManager,
+  synchronizers,
+  Enums: csToolsEnums,
+} = cornerstoneTools;
 
 async function prefetchMetadataInformation(imageIdsToPrefetch) {
   for (let i = 0; i < imageIdsToPrefetch.length; i++) {
@@ -13,7 +20,6 @@ async function prefetchMetadataInformation(imageIdsToPrefetch) {
       .promise;
   }
 }
-
 function getFrameInformation(imageId) {
   if (imageId.includes('wadors:')) {
     const frameIndex = imageId.indexOf('/frames/');
@@ -128,16 +134,17 @@ function updateTextureFromCanvas(gl, tex, unit, canvas) {
   gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
 }
 
-let program
-let texA, texB
-let renderingEngine
 const viewportHeight = 400
 const viewportWidth = 400
-const viewportIds = ['CT_AXIAL_STACK_A', 'CT_AXIAL_STACK_B'];
 const toolGroupId = 'myToolGroup';
 const renderingEngineId = 'myRenderingEngine';
 
-function App() {
+let renderingEngine;
+let toolGroup;
+
+const allViewportIds = ['AXIAL_A', 'AXIAL_B', 'CORONAL_A', 'CORONAL_B', 'SAGITTAL_A', 'SAGITTAL_B']
+
+function Viewport({ id, viewportIds, orientation }) {
   const [tileSize, setTileSize] = useState(viewportHeight / 8);
   const [tileRotation, setTileRotation] = useState(0);
   const [tileOffsetX, setTileOffsetX] = useState(0.0);
@@ -145,15 +152,18 @@ function App() {
   const canvasA = useRef(null)
   const canvasB = useRef(null)
   const canvasMain = useRef(null)
+  const program = useRef(null)
+  const texA = useRef(null)
+  const texB = useRef(null)
 
   useEffect(() => {
-    const glCanvas = document.getElementById('canvasMain');
+    const glCanvas = canvasMain.current
     const gl = glCanvas.getContext('webgl');
     if (!gl) { alert('WebGL not available'); }
-    program = createProgram(gl, vsSource, fsSource);
-    gl.useProgram(program);
+    program.current = createProgram(gl, vsSource, fsSource);
+    gl.useProgram(program.current);
 
-    const posLoc = gl.getAttribLocation(program, 'a_pos');
+    const posLoc = gl.getAttribLocation(program.current, 'a_pos');
     const posBuf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
     const verts = new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]);
@@ -161,55 +171,29 @@ function App() {
     gl.enableVertexAttribArray(posLoc);
     gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
 
-    texA = makeTexture(gl, 0, viewportWidth, viewportHeight);
-    texB = makeTexture(gl, 1, viewportWidth, viewportHeight);
+    texA.current = makeTexture(gl, 0, viewportWidth, viewportHeight);
+    texB.current = makeTexture(gl, 1, viewportWidth, viewportHeight);
 
-    gl.uniform1i(gl.getUniformLocation(program, 'u_texA'), 0);
-    gl.uniform1i(gl.getUniformLocation(program, 'u_texB'), 1);
+    gl.uniform1i(gl.getUniformLocation(program.current, 'u_texA'), 0);
+    gl.uniform1i(gl.getUniformLocation(program.current, 'u_texB'), 1);
 
-    const {
-      PanTool,
-      WindowLevelTool,
-      StackScrollTool,
-      ZoomTool,
-      ToolGroupManager,
-      synchronizers,
-      SynchronizerManager,
-      Enums: csToolsEnums,
-    } = cornerstoneTools;
-    const { MouseBindings } = csToolsEnums;
-    cornerstoneTools.addTool(WindowLevelTool);
-    cornerstoneTools.addTool(PanTool);
-    cornerstoneTools.addTool(ZoomTool);
-    cornerstoneTools.addTool(StackScrollTool);
-    const toolGroup = ToolGroupManager.createToolGroup(toolGroupId);
-    toolGroup.addTool(WindowLevelTool.toolName);
-    toolGroup.addTool(PanTool.toolName);
-    toolGroup.addTool(ZoomTool.toolName);
-    toolGroup.addTool(StackScrollTool.toolName);
-    toolGroup.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary, },], });
-    toolGroup.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary },], });
-    toolGroup.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary, }], });
-    toolGroup.setToolActive(StackScrollTool.toolName, { bindings: [{ mouseButton: MouseBindings.Wheel }], });
-    const syncs = [synchronizers.createImageSliceSynchronizer('sync0'), synchronizers.createVOISynchronizer('sync1')];
-    renderingEngine = new RenderingEngine(renderingEngineId);
+    const syncs = [synchronizers.createCameraPositionSynchronizer(id + '_sync_cam'), synchronizers.createVOISynchronizer(id + '_sync_voi')];
 
     const canvases = [canvasA.current, canvasB.current]
 
-
-    const viewportInputs = canvases.map((element, i) => {
+    canvases.forEach((element, i) => {
       element.style.width = `${viewportWidth}px`;
       element.style.height = `${viewportHeight}px`;
       const viewportId = viewportIds[i]
-      return {
+      const viewportInput = {
         viewportId,
         element,
-        type: Enums.ViewportType.STACK,
+        type: Enums.ViewportType.ORTHOGRAPHIC,
+        defaultOptions: {
+          orientation,
+        },
       };
-    });
-    renderingEngine.setViewports(viewportInputs);
-    renderingEngine.renderViewports(viewportIds);
-    viewportIds.forEach((viewportId) => {
+      renderingEngine.enableElement(viewportInput);
       const viewport = renderingEngine.getViewport(viewportId)
       const CScanvas = viewport.getCanvas()
       CScanvas.width = viewportWidth
@@ -231,13 +215,13 @@ function App() {
     const CScanvasA = viewportA.getCanvas()
     const CScanvasB = viewportB.getCanvas()
     const tick = () => {
-      updateTextureFromCanvas(gl, texA, 0, CScanvasA);
-      updateTextureFromCanvas(gl, texB, 1, CScanvasB);
+      updateTextureFromCanvas(gl, texA.current, 0, CScanvasA);
+      updateTextureFromCanvas(gl, texB.current, 1, CScanvasB);
 
-      gl.uniform2f(gl.getUniformLocation(program, 'u_resolution'), glCanvas.width, glCanvas.height);
-      gl.uniform1f(gl.getUniformLocation(program, 'u_tile_size'), tileSize);
-      gl.uniform1f(gl.getUniformLocation(program, 'u_tile_rotation'), tileRotation / 180 * Math.PI);
-      gl.uniform2f(gl.getUniformLocation(program, 'u_tile_offset'), tileOffsetX, tileOffsetY);
+      gl.uniform2f(gl.getUniformLocation(program.current, 'u_resolution'), glCanvas.width, glCanvas.height);
+      gl.uniform1f(gl.getUniformLocation(program.current, 'u_tile_size'), tileSize);
+      gl.uniform1f(gl.getUniformLocation(program.current, 'u_tile_rotation'), tileRotation / 180 * Math.PI);
+      gl.uniform2f(gl.getUniformLocation(program.current, 'u_tile_offset'), tileOffsetX, tileOffsetY);
 
       gl.clearColor(0, 0, 0, 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
@@ -272,56 +256,40 @@ function App() {
   }, []);
 
   return <div className={`relative w-[${viewportWidth}px] h-[${viewportHeight}px]`}>
-    <input type="file" onChange={async (e) => {
-      const imageId = cornerstoneDICOMImageLoader.wadouri.fileManager.add(e.target.files[0]);
-      const viewport = renderingEngine.getViewport(viewportIds[0])
-      await prefetchMetadataInformation([imageId]);
-      await viewport.setStack(convertMultiframeImageIds([imageId]), 0);
-      cornerstoneTools.utilities.stackPrefetch.enable(viewport.element);
-      viewport.render();
-    }}></input>
-
-    <input type="file" onChange={async (e) => {
-      const imageId = cornerstoneDICOMImageLoader.wadouri.fileManager.add(e.target.files[0]);
-      const viewport = renderingEngine.getViewport(viewportIds[1])
-      await prefetchMetadataInformation([imageId]);
-      await viewport.setStack(convertMultiframeImageIds([imageId]), 0);
-      cornerstoneTools.utilities.stackPrefetch.enable(viewport.element);
-      viewport.render();
-    }}></input>
-
-    <div className='flex justify-start items-center'>
-      <div className='text-center pr-5'>Tile size:</div>
-      <input
-        type="range"
-        min={viewportHeight / 8}
-        max={viewportHeight / 2}
-        value={tileSize}
-        onChange={(e) => setTileSize(Number(e.target.value))}
-        className="w-100 h-10"
-      />
-      <div className='text-center pl-5'>{tileSize}px</div>
-      <div className='text-center px-5'>Tile rotation:</div>
-      <input
-        type="range"
-        min="0"
-        max="360"
-        value={tileRotation}
-        onChange={(e) => setTileRotation(Number(e.target.value))}
-        className="w-100 h-10"
-      />
-      <div className='text-center pl-5'>{tileRotation}px</div>
-      <div className='text-center px-5'>Tile offset:</div>
-      <div className='text-center'>({tileOffsetX}, {tileOffsetY})</div>
+    <div className='flex-col justify-start items-center'>
+      <div className='flex justify-start items-center'>
+        <div className='text-center'>Tile size:</div>
+        <input
+          type="range"
+          min={viewportHeight / 8}
+          max={viewportHeight / 2}
+          value={tileSize}
+          onChange={(e) => setTileSize(Number(e.target.value))}
+          className="w-50 h-10"
+        />
+        <div className='text-center'>{tileSize}px</div>
+      </div>
+      <div className='flex justify-start items-center'>
+        <div className='text-center'>Tile rotation:</div>
+        <input
+          type="range"
+          min="0"
+          max="360"
+          value={tileRotation}
+          onChange={(e) => setTileRotation(Number(e.target.value))}
+          className="w-50 h-10"
+        />
+        <div className='text-center'>{tileRotation}px</div>
+      </div>
     </div>
-    <div className='relative'>
-      <canvas ref={canvasMain} id="canvasMain" width={viewportWidth} height={viewportHeight} className=' z-10 pointer-events-none'></canvas>
+    <div className='relative' style={{ width: viewportWidth, height: viewportHeight }}>
+      <canvas ref={canvasMain} id="canvasMain" width={viewportWidth} height={viewportHeight} className='absolute z-10 pointer-events-none'></canvas>
       <div
         onPointerDown={onPointerDown}
-        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-500 size-10 flex justify-center content-center items-center select-none"
+        className="absolute z-20 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-500 size-5 flex justify-center content-center items-center select-none"
       ></div>
-      <div ref={canvasA} id="canvasA" className='z-0 pointer-events-auto'></div>
-      <div ref={canvasB} id="canvasB" className='z-0 pointer-events-auto'></div>
+      <div ref={canvasA} id="canvasA" className='absolute z-0 pointer-events-auto'></div>
+      <div ref={canvasB} id="canvasB" className='absolute z-0 pointer-events-auto'></div>
     </div>
   </div>;
 }
@@ -331,8 +299,68 @@ async function start() {
   await cornerstoneDICOMImageLoader.init();
   await cornerstoneTools.init();
 
+  const { MouseBindings } = csToolsEnums;
+  cornerstoneTools.addTool(WindowLevelTool);
+  cornerstoneTools.addTool(PanTool);
+  cornerstoneTools.addTool(ZoomTool);
+  cornerstoneTools.addTool(StackScrollTool);
+  toolGroup = ToolGroupManager.createToolGroup(toolGroupId);
+  toolGroup.addTool(WindowLevelTool.toolName);
+  toolGroup.addTool(PanTool.toolName);
+  toolGroup.addTool(ZoomTool.toolName);
+  toolGroup.addTool(StackScrollTool.toolName);
+  toolGroup.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary, },], });
+  toolGroup.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary },], });
+  toolGroup.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary, }], });
+  toolGroup.setToolActive(StackScrollTool.toolName, { bindings: [{ mouseButton: MouseBindings.Wheel }], });
+
+  renderingEngine = new RenderingEngine(renderingEngineId);
+
   const root = ReactDOM.createRoot(document.getElementById('root'));
-  root.render(<App />);
+  root.render(
+    <div>
+      Select First Scan:&nbsp;
+      <input type="file" className='border border-black' onChange={async (e) => {
+        const imageId = cornerstoneDICOMImageLoader.wadouri.fileManager.add(e.target.files[0]);
+        await prefetchMetadataInformation([imageId]);
+        const imageIds = convertMultiframeImageIds([imageId])
+
+        const volumeId = "volumeA"
+        const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds })
+        volume.load();
+        setVolumesForViewports(
+          renderingEngine,
+          [{ volumeId }],
+          [allViewportIds[0], allViewportIds[2], allViewportIds[4]]
+        );
+        renderingEngine.renderViewports(allViewportIds);
+      }}></input>
+
+      Select Second Scan:&nbsp;
+      <input type="file" className='border border-black' onChange={async (e) => {
+        const imageId = cornerstoneDICOMImageLoader.wadouri.fileManager.add(e.target.files[0]);
+        await prefetchMetadataInformation([imageId]);
+        const imageIds = convertMultiframeImageIds([imageId])
+
+        const volumeId = "volumeB"
+        const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds })
+        volume.load();
+        setVolumesForViewports(
+          renderingEngine,
+          [{ volumeId }],
+          [allViewportIds[1], allViewportIds[3], allViewportIds[5]]
+        );
+
+        renderingEngine.renderViewports(allViewportIds);
+      }}></input>
+
+      <div className='flex pt-5'>
+        <Viewport id='VP0' viewportIds={[allViewportIds[0], allViewportIds[1]]} orientation={Enums.OrientationAxis.AXIAL} />
+        <Viewport id='VP1' viewportIds={[allViewportIds[2], allViewportIds[3]]} orientation={Enums.OrientationAxis.CORONAL} />
+        <Viewport id='VP2' viewportIds={[allViewportIds[4], allViewportIds[5]]} orientation={Enums.OrientationAxis.SAGITTAL} />
+      </div>
+    </div>
+  );
 }
 
 start()
