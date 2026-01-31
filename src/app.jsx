@@ -316,6 +316,18 @@ async function start() {
 
   renderingEngine = new RenderingEngine(renderingEngineId);
 
+  // metaData.addProvider((type, imageId) => {
+  //   if (type !== 'imagePlaneModule') return undefined;
+
+  //   return {
+  //     rows: 1,
+  //     columns: 1,
+  //     imageOrientationPatient: [1,0,0, 0,1,0],
+  //     pixelSpacing: 1,
+  //     imagePositionPatient: [0, 0, 0]
+  //   };
+  // }, 0);
+
   const root = ReactDOM.createRoot(document.getElementById('root'));
   root.render(
     <div>
@@ -324,8 +336,8 @@ async function start() {
         const imageId = cornerstoneDICOMImageLoader.wadouri.fileManager.add(e.target.files[0]);
         await prefetchMetadataInformation([imageId]);
         const imageIds = convertMultiframeImageIds([imageId])
-
-        const volumeId = "volumeA"
+        const volumeId = "volumeA-" + e.target.files[0].name
+        console.log(volumeId)
         const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds })
         volume.load();
         setVolumesForViewports(
@@ -342,7 +354,8 @@ async function start() {
         await prefetchMetadataInformation([imageId]);
         const imageIds = convertMultiframeImageIds([imageId])
 
-        const volumeId = "volumeB"
+        const volumeId = "volumeB-" + e.target.files[0].name
+        console.log(e.target.files[0])
         const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds })
         volume.load();
         setVolumesForViewports(
@@ -359,7 +372,7 @@ async function start() {
         <Viewport id='VP1' viewportIds={[allViewportIds[2], allViewportIds[3]]} orientation={Enums.OrientationAxis.CORONAL} />
         <Viewport id='VP2' viewportIds={[allViewportIds[4], allViewportIds[5]]} orientation={Enums.OrientationAxis.SAGITTAL} />
       </div>
-    </div>
+    </div >
   );
 }
 
