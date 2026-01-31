@@ -1,4 +1,3 @@
-import React from 'react';
 import { useEffect, useState, useRef } from "react";
 import ReactDOM from 'react-dom/client';
 import { init as coreInit, RenderingEngine, Enums, metaData, volumeLoader, setVolumesForViewports } from '@cornerstonejs/core';
