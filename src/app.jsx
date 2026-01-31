@@ -1,5 +1,5 @@
 import React from 'react';
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useLayoutEffect, useState, useRef } from "react";
 import ReactDOM from 'react-dom/client';
 import { RenderingEngine, Enums, metaData, init as coreInit } from '@cornerstonejs/core';
 import { imageLoader } from '@cornerstonejs/core/loaders';
@@ -58,24 +58,6 @@ function convertMultiframeImageIds(imageIds) {
   return newImageIds;
 }
 
-async function setImage(imageId) {
-  await prefetchMetadataInformation([imageId]);
-  const stack = convertMultiframeImageIds([imageId]);
-  await viewport.setImage(imageId[0], 0)
-  await viewport.setImage(imageId[1], 0)
-  viewport.render();
-
-  const imageData = viewport.getImageData();
-
-  const {
-    pixelRepresentation,
-    bitsAllocated,
-    bitsStored,
-    highBit,
-    photometricInterpretation,
-  } = metaData.get('imagePixelModule', imageId);
-}
-
 const vsSource = `#version 100
 attribute vec2 a_pos;
 varying vec2 v_uv;
@@ -94,14 +76,16 @@ uniform vec2 u_resolution;
 mat2 rotate(float rad) {
   float c = cos(rad);
   float s = sin(rad);
-  return mat2(c, s, s, c);
+  return mat2(c, -s, s, c);
 }
 void main(){
-vec2 p = rotate(u_tile_rotation) * ((v_uv - vec2(0.5)) * u_resolution + u_tile_offset) / u_tile_size;
+vec2 uv = v_uv - vec2(0.5);
+vec2 p = rotate(u_tile_rotation) * (uv * u_resolution + u_tile_offset) / u_tile_size;
 float m = mod(floor(p.x) + floor(p.y), 2.0);
 vec4 a = texture2D(u_texA, v_uv);
 vec4 b = texture2D(u_texB, v_uv);
 gl_FragColor = mix(a, b, m);
+gl_FragColor.w = 1.0;
 }
 `;
 function createShader(gl, type, src) {
@@ -126,10 +110,11 @@ function createProgram(gl, vsSrc, fsSrc) {
   }
   return p;
 }
-function makeTexture(gl, unit) {
+function makeTexture(gl, unit, width, height) {
   const t = gl.createTexture();
   gl.activeTexture(gl.TEXTURE0 + unit);
   gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
@@ -140,21 +125,26 @@ function updateTextureFromCanvas(gl, tex, unit, canvas) {
   gl.activeTexture(gl.TEXTURE0 + unit);
   gl.bindTexture(gl.TEXTURE_2D, tex);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
 }
 
 let program
 let texA, texB
-
+let renderingEngine
 const viewportHeight = 400
 const viewportWidth = 400
+const viewportIds = ['CT_AXIAL_STACK_A', 'CT_AXIAL_STACK_B'];
+const toolGroupId = 'myToolGroup';
+const renderingEngineId = 'myRenderingEngine';
 
 function App() {
-  const [dummy, setDummy] = useState(0);
   const [tileSize, setTileSize] = useState(viewportHeight / 8);
   const [tileRotation, setTileRotation] = useState(0);
   const [tileOffsetX, setTileOffsetX] = useState(0.0);
   const [tileOffsetY, setTileOffsetY] = useState(0.0);
+  const canvasA = useRef(null)
+  const canvasB = useRef(null)
+  const canvasMain = useRef(null)
 
   useEffect(() => {
     const glCanvas = document.getElementById('canvasMain');
@@ -171,38 +161,93 @@ function App() {
     gl.enableVertexAttribArray(posLoc);
     gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
 
-    texA = makeTexture(gl, 0);
-    texB = makeTexture(gl, 1);
+    texA = makeTexture(gl, 0, viewportWidth, viewportHeight);
+    texB = makeTexture(gl, 1, viewportWidth, viewportHeight);
 
     gl.uniform1i(gl.getUniformLocation(program, 'u_texA'), 0);
     gl.uniform1i(gl.getUniformLocation(program, 'u_texB'), 1);
+
+    const {
+      PanTool,
+      WindowLevelTool,
+      StackScrollTool,
+      ZoomTool,
+      ToolGroupManager,
+      synchronizers,
+      SynchronizerManager,
+      Enums: csToolsEnums,
+    } = cornerstoneTools;
+    const { MouseBindings } = csToolsEnums;
+    cornerstoneTools.addTool(WindowLevelTool);
+    cornerstoneTools.addTool(PanTool);
+    cornerstoneTools.addTool(ZoomTool);
+    cornerstoneTools.addTool(StackScrollTool);
+    const toolGroup = ToolGroupManager.createToolGroup(toolGroupId);
+    toolGroup.addTool(WindowLevelTool.toolName);
+    toolGroup.addTool(PanTool.toolName);
+    toolGroup.addTool(ZoomTool.toolName);
+    toolGroup.addTool(StackScrollTool.toolName);
+    toolGroup.setToolActive(WindowLevelTool.toolName, { bindings: [{ mouseButton: MouseBindings.Primary, },], });
+    toolGroup.setToolActive(PanTool.toolName, { bindings: [{ mouseButton: MouseBindings.Auxiliary },], });
+    toolGroup.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary, }], });
+    toolGroup.setToolActive(StackScrollTool.toolName, { bindings: [{ mouseButton: MouseBindings.Wheel }], });
+    const syncs = [synchronizers.createImageSliceSynchronizer('sync0'), synchronizers.createVOISynchronizer('sync1')];
+    renderingEngine = new RenderingEngine(renderingEngineId);
+
+    const canvases = [canvasA.current, canvasB.current]
+
+
+    const viewportInputs = canvases.map((element, i) => {
+      element.style.width = `${viewportWidth}px`;
+      element.style.height = `${viewportHeight}px`;
+      const viewportId = viewportIds[i]
+      return {
+        viewportId,
+        element,
+        type: Enums.ViewportType.STACK,
+      };
+    });
+    renderingEngine.setViewports(viewportInputs);
+    renderingEngine.renderViewports(viewportIds);
+    viewportIds.forEach((viewportId) => {
+      const viewport = renderingEngine.getViewport(viewportId)
+      const CScanvas = viewport.getCanvas()
+      CScanvas.width = viewportWidth
+      CScanvas.height = viewportHeight
+      toolGroup.addViewport(viewportId, renderingEngineId);
+      syncs.forEach(sync => sync.add({ renderingEngineId, viewportId }));
+    });
+
   }, []);
 
   useEffect(() => {
-    const glCanvas = document.getElementById('canvasMain');
+    let frameId;
+    const glCanvas = canvasMain.current;
     const gl = glCanvas.getContext('webgl');
+    if (!gl)
+      console.error('WebGL context not available');
+    const viewportA = renderingEngine.getViewport(viewportIds[0])
+    const viewportB = renderingEngine.getViewport(viewportIds[1])
+    const CScanvasA = viewportA.getCanvas()
+    const CScanvasB = viewportB.getCanvas()
+    const tick = () => {
+      updateTextureFromCanvas(gl, texA, 0, CScanvasA);
+      updateTextureFromCanvas(gl, texB, 1, CScanvasB);
 
-    const canvasA = document.getElementById('canvasA');
-    const canvasB = document.getElementById('canvasB');
-    const ctxA = canvasA.getContext('2d');
-    const ctxB = canvasB.getContext('2d');
+      gl.uniform2f(gl.getUniformLocation(program, 'u_resolution'), glCanvas.width, glCanvas.height);
+      gl.uniform1f(gl.getUniformLocation(program, 'u_tile_size'), tileSize);
+      gl.uniform1f(gl.getUniformLocation(program, 'u_tile_rotation'), tileRotation / 180 * Math.PI);
+      gl.uniform2f(gl.getUniformLocation(program, 'u_tile_offset'), tileOffsetX, tileOffsetY);
 
-    updateTextureFromCanvas(gl, texA, 0, canvasA);
-    updateTextureFromCanvas(gl, texB, 1, canvasB);
-  }, [dummy]);
-  useEffect(() => {
-    const glCanvas = document.getElementById('canvasMain');
-    const gl = glCanvas.getContext('webgl');
-    console.log(glCanvas.width, glCanvas.height)
-    gl.uniform2f(gl.getUniformLocation(program, 'u_resolution'), glCanvas.width, glCanvas.height);
-    gl.uniform1f(gl.getUniformLocation(program, 'u_tile_size'), tileSize);
-    gl.uniform1f(gl.getUniformLocation(program, 'u_tile_rotation'), tileRotation / 180 * Math.PI);
-    gl.uniform2f(gl.getUniformLocation(program, 'u_tile_offset'), tileOffsetX, tileOffsetY);
+      gl.clearColor(0, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      frameId = requestAnimationFrame(tick);
+    }
 
-    gl.clearColor(0, 0, 0, 1);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-  }, [dummy, tileSize, tileRotation, tileOffsetX, tileOffsetY]);
+    frameId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frameId);
+  }, [tileSize, tileRotation, tileOffsetX, tileOffsetY]);
 
   const dragging = useRef(false);
   const tileStartX = useRef(0.0);
@@ -229,21 +274,21 @@ function App() {
   return <div className={`relative w-[${viewportWidth}px] h-[${viewportHeight}px]`}>
     <input type="file" onChange={async (e) => {
       const imageId = cornerstoneDICOMImageLoader.wadouri.fileManager.add(e.target.files[0]);
-      const image = await imageLoader.loadImage(imageId);
-      const canvasA = document.getElementById('canvasA');
-      renderToCanvasGPU(canvasA, image);
-      setDummy(dummy + 1);
+      const viewport = renderingEngine.getViewport(viewportIds[0])
+      await prefetchMetadataInformation([imageId]);
+      await viewport.setStack(convertMultiframeImageIds([imageId]), 0);
+      cornerstoneTools.utilities.stackPrefetch.enable(viewport.element);
+      viewport.render();
     }}></input>
-    <canvas id="canvasA" width={viewportWidth} height={viewportHeight} className="hidden"></canvas>
 
     <input type="file" onChange={async (e) => {
       const imageId = cornerstoneDICOMImageLoader.wadouri.fileManager.add(e.target.files[0]);
-      const image = await imageLoader.loadImage(imageId);
-      const canvasB = document.getElementById('canvasB');
-      renderToCanvasGPU(canvasB, image);
-      setDummy(dummy + 1);
+      const viewport = renderingEngine.getViewport(viewportIds[1])
+      await prefetchMetadataInformation([imageId]);
+      await viewport.setStack(convertMultiframeImageIds([imageId]), 0);
+      cornerstoneTools.utilities.stackPrefetch.enable(viewport.element);
+      viewport.render();
     }}></input>
-    <canvas id="canvasB" width={viewportWidth} height={viewportHeight} className="hidden"></canvas>
 
     <div className='flex justify-start items-center'>
       <div className='text-center pr-5'>Tile size:</div>
@@ -269,12 +314,14 @@ function App() {
       <div className='text-center px-5'>Tile offset:</div>
       <div className='text-center'>({tileOffsetX}, {tileOffsetY})</div>
     </div>
-    <canvas id="canvasMain" width={viewportWidth} height={viewportHeight}>
-    </canvas>
-    <div
-      onPointerDown={onPointerDown}
-      className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-500 size-10 flex justify-center content-center items-center select-none"
-    >
+    <div className='relative'>
+      <canvas ref={canvasMain} id="canvasMain" width={viewportWidth} height={viewportHeight} className=' z-10 pointer-events-none'></canvas>
+      <div
+        onPointerDown={onPointerDown}
+        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-500 size-10 flex justify-center content-center items-center select-none"
+      ></div>
+      <div ref={canvasA} id="canvasA" className='z-0 pointer-events-auto'></div>
+      <div ref={canvasB} id="canvasB" className='z-0 pointer-events-auto'></div>
     </div>
   </div>;
 }
