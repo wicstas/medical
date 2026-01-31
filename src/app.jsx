@@ -4,6 +4,8 @@ import ReactDOM from 'react-dom/client';
 import { init as coreInit, RenderingEngine, Enums, metaData, volumeLoader, setVolumesForViewports } from '@cornerstonejs/core';
 import cornerstoneDICOMImageLoader from "@cornerstonejs/dicom-image-loader";
 import * as cornerstoneTools from '@cornerstonejs/tools';
+import createImageIdsAndCacheMetaData from './createImageIdsAndCacheMetaData';
+
 const {
   PanTool,
   WindowLevelTool,
@@ -316,17 +318,41 @@ async function start() {
 
   renderingEngine = new RenderingEngine(renderingEngineId);
 
-  // metaData.addProvider((type, imageId) => {
-  //   if (type !== 'imagePlaneModule') return undefined;
-
-  //   return {
-  //     rows: 1,
-  //     columns: 1,
-  //     imageOrientationPatient: [1,0,0, 0,1,0],
-  //     pixelSpacing: 1,
-  //     imagePositionPatient: [0, 0, 0]
-  //   };
-  // }, 0);
+  {
+    const imageIds = await createImageIdsAndCacheMetaData({
+      StudyInstanceUID:
+        '1.2.276.0.7230010.3.1.2.8323329.46581.1769838608.398825',
+      SeriesInstanceUID:
+        '1.2.276.0.7230010.3.1.3.8323329.46581.1769838608.398826',
+      wadoRsRoot: '/orthancUrl/dicom-web/',
+    });
+    const volumeId = "volumeA"
+    const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds })
+    volume.load();
+    setVolumesForViewports(
+      renderingEngine,
+      [{ volumeId }],
+      [allViewportIds[0], allViewportIds[2], allViewportIds[4]]
+    );
+  }
+  {
+        const imageIds = await createImageIdsAndCacheMetaData({
+      StudyInstanceUID:
+        '1.2.276.0.7230010.3.1.2.8323329.46581.1769838608.398825',
+      SeriesInstanceUID:
+        '1.2.276.0.7230010.3.1.3.8323329.46581.1769838608.398826',
+      wadoRsRoot: '/orthancUrl/dicom-web/',
+    });
+    const volumeId = "volumeB"
+    const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds })
+    volume.load();
+    setVolumesForViewports(
+      renderingEngine,
+      [{ volumeId }],
+      [allViewportIds[1], allViewportIds[3], allViewportIds[5]]
+    );
+  }
+  renderingEngine.renderViewports(allViewportIds);
 
   const root = ReactDOM.createRoot(document.getElementById('root'));
   root.render(

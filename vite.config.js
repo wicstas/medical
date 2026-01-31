@@ -19,8 +19,16 @@ export default defineConfig({
   },
 
   server: {
-    fs: {
-      strict: true,
-    },
+    // fs: {
+    //   strict: true,
+    // },
+    proxy: {
+      '/orthancUrl': {
+        target: 'http://localhost:8042',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/orthancUrl/, '')
+      }
+    }
   },
 });
