@@ -135,13 +135,37 @@ function updateTextureFromCanvas(gl, tex, unit, canvas) {
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
   gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
 }
+function ToggleButton({ fn, text }) {
+  const [isPressed, setIsPressed] = useState(false);
+
+  const handleClick = () => {
+    fn(!isPressed);
+    const a = isPressed
+    setIsPressed((x) => !x);
+    console.log(a, isPressed)
+  };
+
+  return (
+    <button
+      onClick={handleClick}
+      className={`
+        px-4 py-2 rounded border transition
+        ${isPressed
+          ? "bg-blue-600 text-white border-blue-600 hover:bg-blue-700"
+          : "bg-gray-100 text-gray-800 border-gray-300 hover:bg-gray-200"}
+      `}
+    >
+      {text}
+    </button>
+  );
+}
 
 const viewportHeight = 400
 const viewportWidth = 400
 const toolGroupId = 'myToolGroup';
-const renderingEngineIds = ['myRenderingEngineA', 'myRenderingEngineB'];
+const renderingEngineId = 'myRenderingEngine';
 
-let renderingEngines = [];
+let renderingEngine;
 let toolGroup;
 
 const allViewportIds = ['AXIAL_A', 'AXIAL_B', 'CORONAL_A', 'CORONAL_B', 'SAGITTAL_A', 'SAGITTAL_B']
@@ -157,7 +181,8 @@ function Viewport({ id, viewportIds, orientation }) {
   const program = useRef(null)
   const texA = useRef(null)
   const texB = useRef(null)
-  const [checkerboardView, setCheckerboardView] = useState(true)
+  const [checkerboardView, setCheckerboardView] = useState(false)
+  const syncs = useRef(null);
 
   useEffect(() => {
     const glCanvas = canvasMain.current
@@ -180,8 +205,7 @@ function Viewport({ id, viewportIds, orientation }) {
     gl.uniform1i(gl.getUniformLocation(program.current, 'u_texA'), 0);
     gl.uniform1i(gl.getUniformLocation(program.current, 'u_texB'), 1);
 
-    const syncs = [synchronizers.createCameraPositionSynchronizer(id + '_sync_cam'), synchronizers.createVOISynchronizer(id + '_sync_voi')];
-
+    syncs.current = [synchronizers.createCameraPositionSynchronizer(id + '_sync_cam'), synchronizers.createVOISynchronizer(id + '_sync_voi')];
     const canvases = [canvasA.current, canvasB.current]
 
     canvases.forEach((element, i) => {
@@ -196,15 +220,12 @@ function Viewport({ id, viewportIds, orientation }) {
           orientation,
         },
       };
-      renderingEngines[i].enableElement(viewportInput);
-      const viewport = renderingEngines[i].getViewport(viewportId)
+      renderingEngine.enableElement(viewportInput);
+      const viewport = renderingEngine.getViewport(viewportId)
       const CScanvas = viewport.getCanvas()
       CScanvas.width = viewportWidth
       CScanvas.height = viewportHeight
-      const renderingEngineId = renderingEngineIds[i]
-      console.log(renderingEngineId,viewportId)
       toolGroup.addViewport(viewportId, renderingEngineId);
-      syncs.forEach(sync => sync.add({ renderingEngineId, viewportId }));
     });
 
   }, []);
@@ -215,8 +236,8 @@ function Viewport({ id, viewportIds, orientation }) {
     const gl = glCanvas.getContext('webgl');
     if (!gl)
       console.error('WebGL context not available');
-    const viewportA = renderingEngines[0].getViewport(viewportIds[0])
-    const viewportB = renderingEngines[1].getViewport(viewportIds[1])
+    const viewportA = renderingEngine.getViewport(viewportIds[0])
+    const viewportB = renderingEngine.getViewport(viewportIds[1])
     const CScanvasA = viewportA.getCanvas()
     const CScanvasB = viewportB.getCanvas()
     const tick = () => {
@@ -252,21 +273,33 @@ function Viewport({ id, viewportIds, orientation }) {
     tileStartY.current = tileOffsetY
   };
   useEffect(() => {
-    window.addEventListener("pointermove", (e) => {
+    const onPointerMove = (e) => {
       if (!dragging.current) return;
       setTileOffsetX(tileStartX.current + pointerStartX.current - e.clientX);
       setTileOffsetY(tileStartY.current - pointerStartY.current + e.clientY);
-    });
-    window.addEventListener("pointerup", () => dragging.current = false)
+    }
+    const onPointerUp = () => dragging.current = false
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp)
     return () => {
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
     };
   }, []);
   return <div>
-    <button onClick={() => {
-      setCheckerboardView((x) => !x)
-    }} className="border border-black">Checkerboard</button>
+    <div className="flex">
+      <ToggleButton fn={(pressed) => {
+        setCheckerboardView(pressed);
+      }} text='Checkerboard' />
+      <ToggleButton fn={(pressed) => {
+        allViewportIds.forEach((viewportId) => {
+          if (pressed)
+            syncs.current.forEach(sync => sync.add({ renderingEngineId, viewportId }));
+          else
+            syncs.current.forEach(sync => sync.remove({ renderingEngineId, viewportId }));
+        });
+      }} text='Enable Sync' />
+    </div>
     <div className={`relative w-[${viewportWidth}px] h-[${viewportHeight}px]`}>
       <div className='flex-col justify-start items-center'>
         <div className='flex justify-start items-center'>
@@ -318,13 +351,13 @@ function App() {
       const imageIds = convertMultiframeImageIds([imageId])
       const volumeId = "volumeA-" + e.target.files[0].name
       const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds })
-      volume.load();
-      await addVolumesToViewports(
-        renderingEngines[0],
+      await volume.load();
+      await setVolumesForViewports(
+        renderingEngine,
         [{ volumeId }],
         [allViewportIds[0], allViewportIds[2], allViewportIds[4]]
       );
-      renderingEngines[0].renderViewports([allViewportIds[0], allViewportIds[2], allViewportIds[4]]
+      renderingEngine.renderViewports([allViewportIds[0], allViewportIds[2], allViewportIds[4]]
       );
     }}></input>
 
@@ -335,14 +368,14 @@ function App() {
       const imageIds = convertMultiframeImageIds([imageId])
       const volumeId = "volumeB-" + e.target.files[0].name
       const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds })
-      volume.load();
-      await addVolumesToViewports(
-        renderingEngines[1],
+      await volume.load();
+      await setVolumesForViewports(
+        renderingEngine,
         [{ volumeId }],
         [allViewportIds[1], allViewportIds[3], allViewportIds[5]]
       );
 
-      renderingEngines[1].renderViewports([allViewportIds[1], allViewportIds[3], allViewportIds[5]]);
+      renderingEngine.renderViewports([allViewportIds[1], allViewportIds[3], allViewportIds[5]]);
     }}></input>
 
     <div className='flex pt-5'>
@@ -373,8 +406,7 @@ async function start() {
   toolGroup.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary, }], });
   toolGroup.setToolActive(StackScrollTool.toolName, { bindings: [{ mouseButton: MouseBindings.Wheel }], });
 
-  renderingEngines[0] = new RenderingEngine(renderingEngineIds[0]);
-  renderingEngines[1] = new RenderingEngine(renderingEngineIds[1]);
+  renderingEngine = new RenderingEngine(renderingEngineId);
 
   const loadFromServer = false
   if (loadFromServer) {
@@ -389,7 +421,7 @@ async function start() {
     const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds })
     volume.load();
     setVolumesForViewports(
-      renderingEngines[0],
+      renderingEngine,
       [{ volumeId }],
       [allViewportIds[0], allViewportIds[2], allViewportIds[4]]
     );
@@ -406,14 +438,13 @@ async function start() {
     const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds })
     volume.load();
     setVolumesForViewports(
-      renderingEngines[1],
+      renderingEngine,
       [{ volumeId }],
       [allViewportIds[1], allViewportIds[3], allViewportIds[5]]
     );
   }
-  renderingEngines[0].renderViewports([allViewportIds[0], allViewportIds[2], allViewportIds[4]])
-  renderingEngines[1].renderViewports([allViewportIds[1], allViewportIds[3], allViewportIds[5]]);
- 
+  renderingEngine.renderViewports(allViewportIds);
+
   const root = ReactDOM.createRoot(document.getElementById('root'));
   root.render(
     <App />
