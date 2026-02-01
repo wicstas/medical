@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import ReactDOM from 'react-dom/client';
-import { init as coreInit, RenderingEngine, Enums, metaData, volumeLoader, setVolumesForViewports } from '@cornerstonejs/core';
+import { init as coreInit, RenderingEngine, Enums, metaData, volumeLoader, addVolumesToViewports, setVolumesForViewports } from '@cornerstonejs/core';
 import cornerstoneDICOMImageLoader from "@cornerstonejs/dicom-image-loader";
 import * as cornerstoneTools from '@cornerstonejs/tools';
 import createImageIdsAndCacheMetaData from './createImageIdsAndCacheMetaData';
@@ -13,6 +13,7 @@ const {
   ToolGroupManager,
   synchronizers,
   Enums: csToolsEnums,
+  BaseTool,
 } = cornerstoneTools;
 
 async function prefetchMetadataInformation(imageIdsToPrefetch) {
@@ -138,9 +139,9 @@ function updateTextureFromCanvas(gl, tex, unit, canvas) {
 const viewportHeight = 400
 const viewportWidth = 400
 const toolGroupId = 'myToolGroup';
-const renderingEngineId = 'myRenderingEngine';
+const renderingEngineIds = ['myRenderingEngineA', 'myRenderingEngineB'];
 
-let renderingEngine;
+let renderingEngines = [];
 let toolGroup;
 
 const allViewportIds = ['AXIAL_A', 'AXIAL_B', 'CORONAL_A', 'CORONAL_B', 'SAGITTAL_A', 'SAGITTAL_B']
@@ -156,6 +157,7 @@ function Viewport({ id, viewportIds, orientation }) {
   const program = useRef(null)
   const texA = useRef(null)
   const texB = useRef(null)
+  const [checkerboardView, setCheckerboardView] = useState(true)
 
   useEffect(() => {
     const glCanvas = canvasMain.current
@@ -194,11 +196,13 @@ function Viewport({ id, viewportIds, orientation }) {
           orientation,
         },
       };
-      renderingEngine.enableElement(viewportInput);
-      const viewport = renderingEngine.getViewport(viewportId)
+      renderingEngines[i].enableElement(viewportInput);
+      const viewport = renderingEngines[i].getViewport(viewportId)
       const CScanvas = viewport.getCanvas()
       CScanvas.width = viewportWidth
       CScanvas.height = viewportHeight
+      const renderingEngineId = renderingEngineIds[i]
+      console.log(renderingEngineId,viewportId)
       toolGroup.addViewport(viewportId, renderingEngineId);
       syncs.forEach(sync => sync.add({ renderingEngineId, viewportId }));
     });
@@ -211,8 +215,8 @@ function Viewport({ id, viewportIds, orientation }) {
     const gl = glCanvas.getContext('webgl');
     if (!gl)
       console.error('WebGL context not available');
-    const viewportA = renderingEngine.getViewport(viewportIds[0])
-    const viewportB = renderingEngine.getViewport(viewportIds[1])
+    const viewportA = renderingEngines[0].getViewport(viewportIds[0])
+    const viewportB = renderingEngines[1].getViewport(viewportIds[1])
     const CScanvasA = viewportA.getCanvas()
     const CScanvasB = viewportB.getCanvas()
     const tick = () => {
@@ -254,45 +258,99 @@ function Viewport({ id, viewportIds, orientation }) {
       setTileOffsetY(tileStartY.current - pointerStartY.current + e.clientY);
     });
     window.addEventListener("pointerup", () => dragging.current = false)
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+    };
   }, []);
+  return <div>
+    <button onClick={() => {
+      setCheckerboardView((x) => !x)
+    }} className="border border-black">Checkerboard</button>
+    <div className={`relative w-[${viewportWidth}px] h-[${viewportHeight}px]`}>
+      <div className='flex-col justify-start items-center'>
+        <div className='flex justify-start items-center'>
+          <div className='text-center'>Tile size:</div>
+          <input
+            type="range"
+            min={viewportHeight / 8}
+            max={viewportHeight / 2}
+            value={tileSize}
+            onChange={(e) => setTileSize(Number(e.target.value))}
+            className="w-50 h-10"
+          />
+          <div className='text-center'>{tileSize}px</div>
+        </div>
+        <div className='flex justify-start items-center'>
+          <div className='text-center'>Tile rotation:</div>
+          <input
+            type="range"
+            min="0"
+            max="360"
+            value={tileRotation}
+            onChange={(e) => setTileRotation(Number(e.target.value))}
+            className="w-50 h-10"
+          />
+          <div className='text-center'>{tileRotation}px</div>
+        </div>
+      </div>
+      <div className='relative' style={{ width: viewportWidth, height: viewportHeight }}>
+        <canvas ref={canvasMain} id="canvasMain" width={viewportWidth} height={viewportHeight} className={'absolute z-10 pointer-events-none ' + (checkerboardView ? `` : `hidden`)}></canvas>
+        {checkerboardView &&
+          <div
+            onPointerDown={onPointerDown}
+            className={"absolute z-20 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-500 size-5 flex justify-center content-center items-center select-none"}
+          ></div>
+        }
+        <div ref={canvasA} id="canvasA" className={checkerboardView ? 'absolute z-0 pointer-events-auto' : ''}></div>
+        <div ref={canvasB} id="canvasB" className={checkerboardView ? 'absolute z-0 pointer-events-auto' : ''}></div>
+      </div>
+    </div>
+  </div>
 
-  return <div className={`relative w-[${viewportWidth}px] h-[${viewportHeight}px]`}>
-    <div className='flex-col justify-start items-center'>
-      <div className='flex justify-start items-center'>
-        <div className='text-center'>Tile size:</div>
-        <input
-          type="range"
-          min={viewportHeight / 8}
-          max={viewportHeight / 2}
-          value={tileSize}
-          onChange={(e) => setTileSize(Number(e.target.value))}
-          className="w-50 h-10"
-        />
-        <div className='text-center'>{tileSize}px</div>
-      </div>
-      <div className='flex justify-start items-center'>
-        <div className='text-center'>Tile rotation:</div>
-        <input
-          type="range"
-          min="0"
-          max="360"
-          value={tileRotation}
-          onChange={(e) => setTileRotation(Number(e.target.value))}
-          className="w-50 h-10"
-        />
-        <div className='text-center'>{tileRotation}px</div>
-      </div>
+}
+function App() {
+  return <div>
+    Select First Scan:&nbsp;
+    <input type="file" className='border border-black' onChange={async (e) => {
+      const imageId = cornerstoneDICOMImageLoader.wadouri.fileManager.add(e.target.files[0]);
+      await prefetchMetadataInformation([imageId]);
+      const imageIds = convertMultiframeImageIds([imageId])
+      const volumeId = "volumeA-" + e.target.files[0].name
+      const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds })
+      volume.load();
+      await addVolumesToViewports(
+        renderingEngines[0],
+        [{ volumeId }],
+        [allViewportIds[0], allViewportIds[2], allViewportIds[4]]
+      );
+      renderingEngines[0].renderViewports([allViewportIds[0], allViewportIds[2], allViewportIds[4]]
+      );
+    }}></input>
+
+    Select Second Scan:&nbsp;
+    <input type="file" className='border border-black' onChange={async (e) => {
+      const imageId = cornerstoneDICOMImageLoader.wadouri.fileManager.add(e.target.files[0]);
+      await prefetchMetadataInformation([imageId]);
+      const imageIds = convertMultiframeImageIds([imageId])
+      const volumeId = "volumeB-" + e.target.files[0].name
+      const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds })
+      volume.load();
+      await addVolumesToViewports(
+        renderingEngines[1],
+        [{ volumeId }],
+        [allViewportIds[1], allViewportIds[3], allViewportIds[5]]
+      );
+
+      renderingEngines[1].renderViewports([allViewportIds[1], allViewportIds[3], allViewportIds[5]]);
+    }}></input>
+
+    <div className='flex pt-5'>
+      <Viewport id='VP0' viewportIds={[allViewportIds[0], allViewportIds[1]]} orientation={Enums.OrientationAxis.AXIAL} />
+      <Viewport id='VP1' viewportIds={[allViewportIds[2], allViewportIds[3]]} orientation={Enums.OrientationAxis.CORONAL} />
+      <Viewport id='VP2' viewportIds={[allViewportIds[4], allViewportIds[5]]} orientation={Enums.OrientationAxis.SAGITTAL} />
     </div>
-    <div className='relative' style={{ width: viewportWidth, height: viewportHeight }}>
-      <canvas ref={canvasMain} id="canvasMain" width={viewportWidth} height={viewportHeight} className='absolute z-10 pointer-events-none'></canvas>
-      <div
-        onPointerDown={onPointerDown}
-        className="absolute z-20 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-500 size-5 flex justify-center content-center items-center select-none"
-      ></div>
-      <div ref={canvasA} id="canvasA" className='absolute z-0 pointer-events-auto'></div>
-      <div ref={canvasB} id="canvasB" className='absolute z-0 pointer-events-auto'></div>
-    </div>
-  </div>;
+  </div >
 }
 
 async function start() {
@@ -315,9 +373,11 @@ async function start() {
   toolGroup.setToolActive(ZoomTool.toolName, { bindings: [{ mouseButton: MouseBindings.Secondary, }], });
   toolGroup.setToolActive(StackScrollTool.toolName, { bindings: [{ mouseButton: MouseBindings.Wheel }], });
 
-  renderingEngine = new RenderingEngine(renderingEngineId);
+  renderingEngines[0] = new RenderingEngine(renderingEngineIds[0]);
+  renderingEngines[1] = new RenderingEngine(renderingEngineIds[1]);
 
-  {
+  const loadFromServer = false
+  if (loadFromServer) {
     const imageIds = await createImageIdsAndCacheMetaData({
       StudyInstanceUID:
         '1.2.276.0.7230010.3.1.2.8323329.46581.1769838608.398825',
@@ -329,13 +389,13 @@ async function start() {
     const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds })
     volume.load();
     setVolumesForViewports(
-      renderingEngine,
+      renderingEngines[0],
       [{ volumeId }],
       [allViewportIds[0], allViewportIds[2], allViewportIds[4]]
     );
   }
-  {
-        const imageIds = await createImageIdsAndCacheMetaData({
+  if (loadFromServer) {
+    const imageIds = await createImageIdsAndCacheMetaData({
       StudyInstanceUID:
         '1.2.276.0.7230010.3.1.2.8323329.46581.1769838608.398825',
       SeriesInstanceUID:
@@ -346,58 +406,17 @@ async function start() {
     const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds })
     volume.load();
     setVolumesForViewports(
-      renderingEngine,
+      renderingEngines[1],
       [{ volumeId }],
       [allViewportIds[1], allViewportIds[3], allViewportIds[5]]
     );
   }
-  renderingEngine.renderViewports(allViewportIds);
-
+  renderingEngines[0].renderViewports([allViewportIds[0], allViewportIds[2], allViewportIds[4]])
+  renderingEngines[1].renderViewports([allViewportIds[1], allViewportIds[3], allViewportIds[5]]);
+ 
   const root = ReactDOM.createRoot(document.getElementById('root'));
   root.render(
-    <div>
-      Select First Scan:&nbsp;
-      <input type="file" className='border border-black' onChange={async (e) => {
-        const imageId = cornerstoneDICOMImageLoader.wadouri.fileManager.add(e.target.files[0]);
-        await prefetchMetadataInformation([imageId]);
-        const imageIds = convertMultiframeImageIds([imageId])
-        const volumeId = "volumeA-" + e.target.files[0].name
-        console.log(volumeId)
-        const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds })
-        volume.load();
-        setVolumesForViewports(
-          renderingEngine,
-          [{ volumeId }],
-          [allViewportIds[0], allViewportIds[2], allViewportIds[4]]
-        );
-        renderingEngine.renderViewports(allViewportIds);
-      }}></input>
-
-      Select Second Scan:&nbsp;
-      <input type="file" className='border border-black' onChange={async (e) => {
-        const imageId = cornerstoneDICOMImageLoader.wadouri.fileManager.add(e.target.files[0]);
-        await prefetchMetadataInformation([imageId]);
-        const imageIds = convertMultiframeImageIds([imageId])
-
-        const volumeId = "volumeB-" + e.target.files[0].name
-        console.log(e.target.files[0])
-        const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds })
-        volume.load();
-        setVolumesForViewports(
-          renderingEngine,
-          [{ volumeId }],
-          [allViewportIds[1], allViewportIds[3], allViewportIds[5]]
-        );
-
-        renderingEngine.renderViewports(allViewportIds);
-      }}></input>
-
-      <div className='flex pt-5'>
-        <Viewport id='VP0' viewportIds={[allViewportIds[0], allViewportIds[1]]} orientation={Enums.OrientationAxis.AXIAL} />
-        <Viewport id='VP1' viewportIds={[allViewportIds[2], allViewportIds[3]]} orientation={Enums.OrientationAxis.CORONAL} />
-        <Viewport id='VP2' viewportIds={[allViewportIds[4], allViewportIds[5]]} orientation={Enums.OrientationAxis.SAGITTAL} />
-      </div>
-    </div >
+    <App />
   );
 }
 

@@ -1,5 +1,6 @@
 {
   "name": "my-website",
+  "type": "module",
   "version": "1.0.0",
   "dependencies": {
     "@cornerstonejs/codec-libjpeg-turbo-8bit": "^1.2.2",
