@@ -168,8 +168,6 @@ const renderingEngineId = 'myRenderingEngine';
 let renderingEngine;
 let toolGroup;
 
-const allViewportIds = ['AXIAL_A', 'AXIAL_B', 'CORONAL_A', 'CORONAL_B', 'SAGITTAL_A', 'SAGITTAL_B']
-
 function Viewport({ id, viewportIds, orientation }) {
   const [tileSize, setTileSize] = useState(viewportHeight / 8);
   const [tileRotation, setTileRotation] = useState(0);
@@ -292,7 +290,7 @@ function Viewport({ id, viewportIds, orientation }) {
         setCheckerboardView(pressed);
       }} text='Checkerboard' />
       <ToggleButton fn={(pressed) => {
-        allViewportIds.forEach((viewportId) => {
+        viewportIds.forEach((viewportId) => {
           if (pressed)
             syncs.current.forEach(sync => sync.add({ renderingEngineId, viewportId }));
           else
@@ -342,6 +340,9 @@ function Viewport({ id, viewportIds, orientation }) {
   </div>
 
 }
+
+const allViewportIds = ['AXIAL_A', 'AXIAL_B', 'CORONAL_A', 'CORONAL_B', 'SAGITTAL_A', 'SAGITTAL_B']
+
 function App() {
   return <div>
     Select First Scan:&nbsp;
