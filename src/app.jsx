@@ -80,6 +80,8 @@ uniform float u_tile_size;
 uniform float u_tile_rotation;
 uniform vec2 u_tile_offset;
 uniform vec2 u_resolution;
+uniform bool u_stack;
+uniform float u_stack_ratio;
 
 mat2 rotate(float rad) {
   float c = cos(rad);
@@ -87,13 +89,21 @@ mat2 rotate(float rad) {
   return mat2(c, -s, s, c);
 }
 void main(){
-vec2 uv = v_uv - vec2(0.5);
-vec2 p = rotate(u_tile_rotation) * (uv * u_resolution + u_tile_offset) / u_tile_size;
-float m = mod(floor(p.x) + floor(p.y), 2.0);
-vec4 a = texture2D(u_texA, v_uv);
-vec4 b = texture2D(u_texB, v_uv);
-gl_FragColor = mix(a, b, m);
-gl_FragColor.w = 1.0;
+  vec2 uv = v_uv - vec2(0.5);
+  if(u_stack) {
+    if(abs(uv.x) < u_stack_ratio/2. && abs(uv.y) < u_stack_ratio/2.)
+      gl_FragColor = texture2D(u_texA, v_uv);
+    else
+      gl_FragColor = texture2D(u_texB, v_uv);
+  }
+  else {
+    vec2 p = rotate(u_tile_rotation) * (uv * u_resolution + u_tile_offset) / u_tile_size;
+    float m = mod(floor(p.x) + floor(p.y), 2.0);
+    vec4 a = texture2D(u_texA, v_uv);
+    vec4 b = texture2D(u_texB, v_uv);
+    gl_FragColor = mix(a, b, m);
+    gl_FragColor.w = 1.0;
+  }
 }
 `;
 function createShader(gl, type, src) {
@@ -142,7 +152,6 @@ function ToggleButton({ fn, text }) {
     fn(!isPressed);
     const a = isPressed
     setIsPressed((x) => !x);
-    console.log(a, isPressed)
   };
 
   return (
@@ -173,6 +182,7 @@ function Viewport({ id, viewportIds, orientation }) {
   const [tileRotation, setTileRotation] = useState(0);
   const [tileOffsetX, setTileOffsetX] = useState(0.0);
   const [tileOffsetY, setTileOffsetY] = useState(0.0);
+  const [stackRatio, setStackRatio] = useState(0.5);
   const canvasA = useRef(null)
   const canvasB = useRef(null)
   const canvasMain = useRef(null)
@@ -180,6 +190,7 @@ function Viewport({ id, viewportIds, orientation }) {
   const texA = useRef(null)
   const texB = useRef(null)
   const [checkerboardView, setCheckerboardView] = useState(false)
+  const [stackView, setStackView] = useState(false)
   const syncs = useRef(null);
 
   useEffect(() => {
@@ -246,7 +257,8 @@ function Viewport({ id, viewportIds, orientation }) {
       gl.uniform1f(gl.getUniformLocation(program.current, 'u_tile_size'), tileSize);
       gl.uniform1f(gl.getUniformLocation(program.current, 'u_tile_rotation'), tileRotation / 180 * Math.PI);
       gl.uniform2f(gl.getUniformLocation(program.current, 'u_tile_offset'), tileOffsetX, tileOffsetY);
-
+      gl.uniform1i(gl.getUniformLocation(program.current, 'u_stack'), stackView);
+      gl.uniform1f(gl.getUniformLocation(program.current, 'u_stack_ratio'), stackRatio);
       gl.clearColor(0, 0, 0, 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
@@ -255,7 +267,7 @@ function Viewport({ id, viewportIds, orientation }) {
 
     frameId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frameId);
-  }, [tileSize, tileRotation, tileOffsetX, tileOffsetY]);
+  }, [tileSize, tileRotation, tileOffsetX, tileOffsetY, stackRatio, stackView]);
 
   const dragging = useRef(false);
   const tileStartX = useRef(0.0);
@@ -288,7 +300,14 @@ function Viewport({ id, viewportIds, orientation }) {
     <div className="flex">
       <ToggleButton fn={(pressed) => {
         setCheckerboardView(pressed);
+        if (pressed)
+          setStackView(false);
       }} text='Checkerboard' />
+      <ToggleButton fn={(pressed) => {
+        setStackView(pressed);
+        if (pressed)
+          setCheckerboardView(false);
+      }} text='Stack' />
       <ToggleButton fn={(pressed) => {
         viewportIds.forEach((viewportId) => {
           if (pressed)
@@ -324,17 +343,30 @@ function Viewport({ id, viewportIds, orientation }) {
           />
           <div className='text-center'>{tileRotation}px</div>
         </div>
+        <div className='flex justify-start items-center'>
+          <div className='text-center'>Stack ratio:</div>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={stackRatio}
+            onChange={(e) => setStackRatio(Number(e.target.value))}
+            className="w-50 h-10"
+          />
+          <div className='text-center'>{Math.trunc(stackRatio * 100)}%</div>
+        </div>
       </div>
       <div className='relative' style={{ width: viewportWidth, height: viewportHeight }}>
-        <canvas ref={canvasMain} id="canvasMain" width={viewportWidth} height={viewportHeight} className={'absolute z-10 pointer-events-none ' + (checkerboardView ? `` : `hidden`)}></canvas>
-        {checkerboardView &&
+        <canvas ref={canvasMain} id="canvasMain" width={viewportWidth} height={viewportHeight} className={'absolute z-10 pointer-events-none ' + (checkerboardView || stackView ? `` : `hidden`)}></canvas>
+        {(checkerboardView || stackView) &&
           <div
             onPointerDown={onPointerDown}
             className={"absolute z-20 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-500 size-5 flex justify-center content-center items-center select-none"}
           ></div>
         }
-        <div ref={canvasA} id="canvasA" className={checkerboardView ? 'absolute z-0 pointer-events-auto' : ''}></div>
-        <div ref={canvasB} id="canvasB" className={checkerboardView ? 'absolute z-0 pointer-events-auto' : ''}></div>
+        <div ref={canvasA} id="canvasA" className={checkerboardView || stackView ? 'absolute z-0 pointer-events-auto' : ''}></div>
+        <div ref={canvasB} id="canvasB" className={checkerboardView || stackView ? 'absolute z-0 pointer-events-auto' : ''}></div>
       </div>
     </div>
   </div>
