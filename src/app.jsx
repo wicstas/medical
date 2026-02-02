@@ -145,21 +145,13 @@ function updateTextureFromCanvas(gl, tex, unit, canvas) {
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
   gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
 }
-function ToggleButton({ fn, text }) {
-  const [isPressed, setIsPressed] = useState(false);
-
-  const handleClick = () => {
-    fn(!isPressed);
-    const a = isPressed
-    setIsPressed((x) => !x);
-  };
-
+function ToggleButton({ fn, text, state }) {
   return (
     <button
-      onClick={handleClick}
+      onClick={fn}
       className={`
         px-4 py-2 rounded border transition
-        ${isPressed
+        ${state
           ? "bg-blue-600 text-white border-blue-600 hover:bg-blue-700"
           : "bg-gray-100 text-gray-800 border-gray-300 hover:bg-gray-200"}
       `}
@@ -191,6 +183,8 @@ function Viewport({ id, viewportIds, orientation }) {
   const texB = useRef(null)
   const [checkerboardView, setCheckerboardView] = useState(false)
   const [stackView, setStackView] = useState(false)
+  const [swapView, setSwap] = useState(false)
+  const [syncView, setSyncView] = useState(false)
   const syncs = useRef(null);
 
   useEffect(() => {
@@ -253,6 +247,13 @@ function Viewport({ id, viewportIds, orientation }) {
       updateTextureFromCanvas(gl, texA.current, 0, CScanvasA);
       updateTextureFromCanvas(gl, texB.current, 1, CScanvasB);
 
+      if (swapView) {
+        gl.uniform1i(gl.getUniformLocation(program.current, 'u_texA'), 1);
+        gl.uniform1i(gl.getUniformLocation(program.current, 'u_texB'), 0);
+      } else {
+        gl.uniform1i(gl.getUniformLocation(program.current, 'u_texA'), 0);
+        gl.uniform1i(gl.getUniformLocation(program.current, 'u_texB'), 1);
+      }
       gl.uniform2f(gl.getUniformLocation(program.current, 'u_resolution'), glCanvas.width, glCanvas.height);
       gl.uniform1f(gl.getUniformLocation(program.current, 'u_tile_size'), tileSize);
       gl.uniform1f(gl.getUniformLocation(program.current, 'u_tile_rotation'), tileRotation / 180 * Math.PI);
@@ -267,7 +268,7 @@ function Viewport({ id, viewportIds, orientation }) {
 
     frameId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frameId);
-  }, [tileSize, tileRotation, tileOffsetX, tileOffsetY, stackRatio, stackView]);
+  }, [tileSize, tileRotation, tileOffsetX, tileOffsetY, stackRatio, stackView, swapView]);
 
   const dragging = useRef(false);
   const tileStartX = useRef(0.0);
@@ -298,24 +299,26 @@ function Viewport({ id, viewportIds, orientation }) {
   }, []);
   return <div>
     <div className="flex">
-      <ToggleButton fn={(pressed) => {
-        setCheckerboardView(pressed);
-        if (pressed)
-          setStackView(false);
-      }} text='Checkerboard' />
-      <ToggleButton fn={(pressed) => {
-        setStackView(pressed);
-        if (pressed)
-          setCheckerboardView(false);
-      }} text='Stack' />
-      <ToggleButton fn={(pressed) => {
+      <ToggleButton fn={() => {
+        setCheckerboardView(x => !x);
+        setStackView(false);
+      }} text='Checkerboard' state={checkerboardView} />
+      <ToggleButton fn={() => {
+        setStackView(x => !x);
+        setCheckerboardView(false);
+      }} text='Stack' state={stackView} />
+      <ToggleButton fn={() => {
         viewportIds.forEach((viewportId) => {
-          if (pressed)
+          if (!syncView)
             syncs.current.forEach(sync => sync.add({ renderingEngineId, viewportId }));
           else
             syncs.current.forEach(sync => sync.remove({ renderingEngineId, viewportId }));
         });
-      }} text='Enable Sync' />
+        setSyncView(x => !x);
+      }} text='Sync' state={syncView} />
+      <ToggleButton fn={() => {
+        setSwap(x => !x)
+      }} text='Swap' state={swapView} />
     </div>
     <div className={`relative w-[${viewportWidth}px] h-[${viewportHeight}px]`}>
       <div className='flex-col justify-start items-center'>
